@@ -155,18 +155,29 @@ def enrich_query_35(query):
 
 # --- 4. Web search queries from original query ---
 def search_queries_35(query):
+    system_prompt = """
+You are a search query generator for an IAS officer recommendation system in India.
+
+Your task is to generate 3–5 specific **web search queries** that help discover **suitable IAS officers** for a given role or ministry — not people who already hold that position.
+
+✅ Guidelines:
+- Use the user query to understand what kind of officer is needed.
+- Generate queries that focus on discovering *potential candidates* based on background, domain experience, or seniority.
+- Include keywords like: "IAS officers", "Indian Administrative Service", "senior IAS", "IAS with experience in..."
+- Be flexible: adapt your queries to the domain or role mentioned by the user (e.g., education, health, finance, technology, etc.)
+
+❌ Avoid:
+- Queries likely to return current officeholders, appointees, ministers, or secretaries
+- Keywords like "current", "appointed", "incumbent", "present"
+
+✅ Output Format:
+Only return a valid JSON list of short search queries. No explanations, no formatting.
+"""
+
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a search query generator for a system that finds information about IAS officers in India only.\n"
-                    "Generate a list of 3–5 precise web search queries that explicitly mention 'IAS officers' or similar phrases like 'Indian Administrative Service'.\n"
-                    "Avoid queries that might match police officers, foreign officers, or unrelated roles.\n"
-                    "Return ONLY a valid JSON list of short search queries. No explanations, no bullet points, no preambles."
-                )
-            },
+            {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": query}
         ],
         temperature=0.4
@@ -174,28 +185,48 @@ def search_queries_35(query):
     parsed = safe_json_parse(response.choices[0].message.content)
     return {"web_queries": parsed if isinstance(parsed, list) else [query]}
 
+
 # --- 5. Summarize web search results ---
 def web_output_35(query, snippets):
     joined = "\n".join(map(str, snippets))
+
+    system_prompt = """
+You are a summarization assistant helping select **suitable IAS officers** based on raw web snippets.
+
+🎯 Objective:
+Summarize officers mentioned in the web snippets who appear to be **good candidates for the user's requested role**, based on experience, domain expertise, or seniority — but **exclude** those who:
+- Are **already in that exact position** (e.g. if the user asked for a Joint Secretary, exclude current Joint Secretaries)
+- Are **serving in a higher position** (e.g., Secretary, Cabinet Minister, Additional Secretary)
+- Are clearly **appointed to the target ministry or department** already
+
+📥 User query may describe the target role or ministry (e.g., “suggest a Joint Secretary for Ministry of Health”).
+
+🛠️ Rules:
+- If a snippet says an officer is already a Secretary, Joint Secretary, or Minister **in that ministry**, exclude them.
+- If a snippet does not clearly say their **current designation**, keep them if their **background or past roles match** the domain.
+
+📝 Output Format:
+- Group findings by officer if names are available; use 'Unknown Officer' otherwise.
+- Use markdown format:
+    **1) Officer Name**
+    - Key detail 1
+    - Key detail 2
+- Always end with: 🌐 Source: WEB
+"""
+
+    user_prompt = f"Query: {query}\n\nSnippets:\n{joined}"
+
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a summarizer bot helping a user find IAS officers based on web snippets.\n"
-                    "Group the findings by officer if names are available, otherwise use 'Unknown Officer'.\n"
-                    "Format your response in clean markdown. Each section should begin with the officer name like\n"
-                    "`**1) Officer Name**`. If the officer is unknown, say `**1) Unknown Officer**`.\n\n"
-                    "Use bullet points where appropriate. Avoid returning structured data like JSON or dictionaries.\n"
-                    "Conclude with '🌐 Source: WEB'."
-                )
-            },
-            {"role": "user", "content": f"Query: {query}\n\nSnippets:\n{joined}"}
+            {"role": "system", "content": system_prompt.strip()},
+            {"role": "user", "content": user_prompt}
         ],
         temperature=0.4
     )
+
     return response.choices[0].message.content.strip()
+
 
 # --- 6. Refine web search queries ---
 def refine_search_queries_35(refine_query_with_names):
