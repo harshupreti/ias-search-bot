@@ -238,6 +238,19 @@ def handle_user_query(query, session, user_feedback=None):
     light_officers = [strip_heavy_fields(o) for o in valid_top]
     summary = rate_limited_call(format_output_4, query, json.dumps(light_officers))
     log(f"LLM Summary: {summary}")
+
+    parsed_summary = []
+    try:
+        parsed_summary = json.loads(summary)
+    except Exception as e:
+        log(f"⚠️ JSON parse error in LLM gold output: {e}")
+
+    # Check if parsed summary is empty
+    if not parsed_summary:
+        log("LLM returned no officers. Falling back to RAW.")
+        resp, res, src = fallback_to_raw_or_web(query, query_vector, session, user_feedback)
+        return resp, res, src, get_logs()
+
     session.update(query, valid_top, is_refinement=False)
 
     return (
@@ -246,6 +259,7 @@ def handle_user_query(query, session, user_feedback=None):
         "gold",
         get_logs()
     )
+
 # --- RAW Fallback ---
 def fallback_to_raw_or_web(query, query_vector, session, user_feedback):
     raw_hits = client.search(
