@@ -9,9 +9,16 @@ load_dotenv(dotenv_path="GITHUB_TOKEN.env")
 token = os.environ["GITHUB_TOKEN"]
 
 # Setup OpenAI client
-endpoint = "https://models.github.ai/inference"
-model = "openai/gpt-4.1"
-client = OpenAI(base_url=endpoint, api_key=token)
+# endpoint = "https://models.github.ai/inference"
+model = "gpt-4o-mini"
+client = OpenAI(api_key=token)
+
+# endpoint = "https://models.github.ai/inference"
+# model = "openai/gpt-4.1"
+# client = OpenAI(
+#     base_url=endpoint,
+#     api_key=token,
+# )
 
 # Available metadata fields for structured verification
 GOLD_FIELDS = {
@@ -43,16 +50,24 @@ def verification_query_35(query, fields):
     metadata_str = ", ".join(metadata_fields)
 
     system_prompt = f"""
-You are a strict classifier. Determine if the user query can be answered using structured officer metadata.
+You are a strict classifier that checks if a user query can be answered using structured IAS officer metadata.
 
-ONLY respond with JSON: {{ "irrelevant": true/false }}
-
-The structured metadata fields available are:
+Here are the **available metadata fields**:
 {metadata_str}
 
-If the query asks about anything outside this list — such as behavior, opinions, recent news, controversies, family background, etc. — mark it as irrelevant.
+✅ You SHOULD mark the query as `"irrelevant": false` if it:
+- Uses filters on any of these fields (e.g. year > 2000, cadre = Bihar)
+- Asks about education, training, recruitment, postings, or awards
+- Requests grouping, sorting, or selection based on structured fields
 
-Respond strictly with JSON. No comments or explanations.
+❌ Mark as `"irrelevant": true` only if:
+- It asks for personal views, opinions, ethics, media news, behavior, controversies, or recent public reports
+- It requires real-time info or family background
+- It has nothing to do with officer data
+
+Return ONLY a JSON object like: {{ "irrelevant": true/false }}
+
+DO NOT include any extra text or explanation.
 """
 
     response = client.chat.completions.create(
@@ -61,18 +76,28 @@ Respond strictly with JSON. No comments or explanations.
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": query}
         ],
-        temperature=0.2
+        temperature=0.0  # deterministic
     )
+    raw = response.choices[0].message.content
+    print("[DEBUG] Raw verification LLM response:", raw)
+    return safe_json_parse(raw)
 
-    return safe_json_parse(response.choices[0].message.content)
 
 # --- 2. Generate final gold response ---
 def generate_final_response(query: str, officer_data_json: str) -> str:
     system_prompt = """
-You are an AI assistant that formats and cleans structured IAS officer metadata based on a user query.
+You are an AI assistant that formats structured IAS officer metadata based on a user query.
 
-Your task is to return a VALID JSON list of officer entries, strictly following this cleaned format:
+Your task is to:
+1. Return a VALID JSON list of officers
+2. For each officer:
+   - Only include the latest and most relevant postings based on the user query
+   - Omit any fields that are None or contain 'N/A'
+   - Add a "selection_reasoning" field that briefly explains (in 3–4 lines) why this officer is a good match for the query
+3. Remove any officer that is not even remotely relevant to the query or is a bad match.
+Be precise and only use details from the metadata. Do NOT invent.
 
+Format:
 [
   {
     "officer_name": "...",
@@ -80,14 +105,20 @@ Your task is to return a VALID JSON list of officer entries, strictly following 
     "allotment_year": "...",
     "recruitment_mode": "...",
     "education": "...",
-    "postings": ["..."],
+    "postings": ["..."],  # Only latest and relevant to query
     "training_details": ["..."],
     "awards_publications": "...",
     "source_file": "...",
-    "source": "gold"
-  }
+    "source": "gold",
+    "selection_reasoning": "This officer was selected because ..."
+  },
+  ...
 ]
+
+Keep officer_name clean (remove any 'Identity No.' etc.)
+Always include ALL officers given in the metadata.
 """
+
 
     user_content = f"User Query:\n{query}\n\nOfficer Metadata:\n{officer_data_json}"
 
@@ -95,10 +126,10 @@ Your task is to return a VALID JSON list of officer entries, strictly following 
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": system_prompt.strip()},
                 {"role": "user", "content": user_content}
             ],
-            temperature=0.4,
+            temperature=0.25,
             top_p=1.0
         )
         return response.choices[0].message.content.strip()
@@ -107,7 +138,6 @@ Your task is to return a VALID JSON list of officer entries, strictly following 
         return "[]"
 
 def format_output_4(query, officer_data):
-    from llm_utils import generate_final_response
     response = generate_final_response(query, json.dumps(officer_data))
     return safe_json_parse(response)
 
